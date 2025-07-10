@@ -1,0 +1,12 @@
+# Essential packages
+pybullet
+numpy
+matplotlib
+opencv-python
+scipy
+
+# Additional useful packages
+gym
+stable-baselines3  # For RL if needed
+urdfpy  # URDF manipulation
+trimesh  # 3D mesh processing

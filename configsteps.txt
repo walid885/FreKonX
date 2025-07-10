@@ -1,0 +1,26 @@
+# Install conda (if not already installed)
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
+
+# Create virtual environment
+conda create -n humanoid_robotics python=3.10
+conda activate humanoid_robotics
+
+# Alternative with venv
+python -m venv humanoid_env
+source humanoid_env/bin/activate  # Linux/Mac
+# humanoid_env\Scripts\activate  # Windows
+
+
+#installing those pacakges 
+# Essential packages
+pip install pybullet
+pip install numpy matplotlib
+pip install opencv-python
+pip install scipy
+
+# Additional useful packages
+pip install gym
+pip install stable-baselines3  # For RL if needed
+pip install urdfpy  # URDF manipulation
+pip install trimesh  # 3D mesh processing
