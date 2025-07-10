@@ -107,27 +107,54 @@ for i, (current, (lower, upper)) in enumerate(zip(current_positions, joint_limit
         target = current + 0.1
     target_positions.append(target)
 
+# Find leg/ankle joints for balance compensation
+balance_joints = []
+leg_keywords = ['leg', 'ankle', 'hip', 'knee', 'foot']
+for i in movable_joints:
+    joint_info = p.getJointInfo(robot_id, i)
+    joint_name = joint_info[1].decode('utf-8').lower()
+    if any(keyword in joint_name for keyword in leg_keywords):
+        balance_joints.append(i)
+
+print(f"Found {len(balance_joints)} balance joints")
+
+# Store initial joint positions for balance reference
+initial_positions = {}
+for joint_id in movable_joints:
+    joint_state = p.getJointState(robot_id, joint_id)
+    initial_positions[joint_id] = joint_state[0]
+
 # Wave animation parameters
-wave_frequency = 0.8
-wave_amplitude = 0.15
+wave_frequency = 0.5  # Slower for better balance
+wave_amplitude = 0.1  # Smaller amplitude
 step_count = 0
 
-print("Starting wave animation while maintaining standing posture...")
+print("Starting wave animation with balance compensation...")
 
 while True:
     # Calculate wave motion
     t = step_count * 0.01
     wave_offset = math.sin(t * wave_frequency * 2 * math.pi) * wave_amplitude
     
-    # Keep all non-arm joints in their current positions (maintain standing)
-    for joint_id in movable_joints:
-        if joint_id not in right_arm_joints:
-            joint_state = p.getJointState(robot_id, joint_id)
-            p.setJointMotorControl2(robot_id, joint_id, p.POSITION_CONTROL, 
-                                  targetPosition=joint_state[0], 
-                                  force=1000)
+    # Get current center of mass position
+    com_pos, com_vel = p.getBasePositionAndOrientation(robot_id)[:2]
     
-    # Apply wave motion to arm joints
+    # Apply stronger position control to leg joints for balance
+    for joint_id in balance_joints:
+        p.setJointMotorControl2(robot_id, joint_id, p.POSITION_CONTROL, 
+                              targetPosition=initial_positions[joint_id], 
+                              force=2000,  # Higher force for balance
+                              positionGain=0.8,  # Higher gain for stability
+                              velocityGain=0.1)
+    
+    # Keep other non-arm joints in position with high force
+    for joint_id in movable_joints:
+        if joint_id not in right_arm_joints and joint_id not in balance_joints:
+            p.setJointMotorControl2(robot_id, joint_id, p.POSITION_CONTROL, 
+                                  targetPosition=initial_positions[joint_id], 
+                                  force=1500)
+    
+    # Apply wave motion to arm joints with reduced force
     for i, joint_id in enumerate(right_arm_joints[:3]):
         if i < len(target_positions):
             if i == 0:
@@ -145,7 +172,9 @@ while True:
             
             p.setJointMotorControl2(robot_id, joint_id, p.POSITION_CONTROL, 
                                   targetPosition=target_pos, 
-                                  force=500)
+                                  force=300,  # Reduced force to minimize balance disruption
+                                  positionGain=0.5,
+                                  velocityGain=0.1)
     
     p.stepSimulation()
     time.sleep(1./240.)
