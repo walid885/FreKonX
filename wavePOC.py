@@ -3,184 +3,219 @@ import pybullet_data
 import time
 import math
 from robot_descriptions.loaders.pybullet import load_robot_description
+from typing import List, Dict, Tuple, Optional
+from functools import partial
+from dataclasses import dataclass
 
-# Start PyBullet
-p.connect(p.GUI)
-p.setAdditionalSearchPath(pybullet_data.getDataPath())
-p.setGravity(0, 0, -9.81)
+@dataclass
+class JointInfo:
+    id: int
+    name: str
+    type: int
+    limits: Tuple[float, float]
+    current_position: float
 
-# Load ground plane
-p.loadURDF("plane.urdf")
+@dataclass
+class SimulationConfig:
+    gravity: float = -9.81
+    robot_height: float = 1.2
+    stabilization_steps: int = 1000
+    simulation_rate: float = 240.0
+    wave_frequency: float = 0.5
+    wave_amplitude: float = 0.1
 
-# Load Valkyrie
-robot_id = load_robot_description("valkyrie_description")
+def initialize_physics_engine() -> None:
+    """Initialize PyBullet physics engine with default settings."""
+    p.connect(p.GUI)
+    p.setAdditionalSearchPath(pybullet_data.getDataPath())
+    p.setGravity(0, 0, -9.81)
+    p.loadURDF("plane.urdf")
 
-print(f"Robot loaded with ID: {robot_id}")
+def load_robot(description: str, position: List[float]) -> int:
+    """Load robot from description and set initial position."""
+    robot_id = load_robot_description(description)
+    p.resetBasePositionAndOrientation(robot_id, position, [0, 0, 0, 1])
+    return robot_id
 
-# Get robot info
-num_joints = p.getNumJoints(robot_id)
-print(f"Total joints: {num_joints}")
-
-# Find all movable joints and set them to position control
-movable_joints = []
-for i in range(num_joints):
-    joint_info = p.getJointInfo(robot_id, i)
-    joint_name = joint_info[1].decode('utf-8')
-    joint_type = joint_info[2]
-    
-    # Only control revolute and prismatic joints
-    if joint_type in [p.JOINT_REVOLUTE, p.JOINT_PRISMATIC]:
-        movable_joints.append(i)
-        
-        # Get current position
-        joint_state = p.getJointState(robot_id, i)
-        current_pos = joint_state[0]
-        
-        # Set initial position control to hold current position
-        p.setJointMotorControl2(robot_id, i, p.POSITION_CONTROL, 
-                              targetPosition=current_pos, 
-                              force=1000)  # High force to maintain position
-
-print(f"Controlling {len(movable_joints)} movable joints")
-
-# Position robot at proper height (adjust based on robot's feet)
-# Start higher to account for robot height
-p.resetBasePositionAndOrientation(robot_id, [0, 0, 1.2], [0, 0, 0, 1])
-
-# Stabilize robot with all joints held in position
-print("Stabilizing robot...")
-for i in range(1000):
-    p.stepSimulation()
-    if i % 200 == 0:
-        pos, orient = p.getBasePositionAndOrientation(robot_id)
-        print(f"Stabilization step {i}: Robot position = {pos[2]:.3f}")
-    time.sleep(1./240.)
-
-# Find right arm joints specifically
-right_arm_joints = []
-arm_keywords = ['rightarm', 'right_arm', 'rightshoulder', 'rightelbow', 'rightwrist', 'r_arm', 'r_shoulder', 'r_elbow']
-
-for i in range(num_joints):
-    joint_info = p.getJointInfo(robot_id, i)
-    joint_name = joint_info[1].decode('utf-8').lower()
-    joint_type = joint_info[2]
-    
-    if joint_type in [p.JOINT_REVOLUTE, p.JOINT_PRISMATIC]:
-        if any(keyword in joint_name for keyword in arm_keywords):
-            right_arm_joints.append(i)
-            print(f"Found right arm joint: {joint_info[1].decode('utf-8')} (ID: {i})")
-
-# If no specific right arm joints found, look for general arm joints
-if not right_arm_joints:
-    print("No specific right arm joints found, searching for general arm joints...")
-    for i in movable_joints:
-        joint_info = p.getJointInfo(robot_id, i)
-        joint_name = joint_info[1].decode('utf-8').lower()
-        if 'arm' in joint_name or 'shoulder' in joint_name:
-            right_arm_joints.append(i)
-            print(f"Found arm joint: {joint_info[1].decode('utf-8')} (ID: {i})")
-
-print(f"Using arm joints: {right_arm_joints}")
-
-if not right_arm_joints:
-    print("WARNING: No arm joints found! Using first 3 movable joints as fallback.")
-    right_arm_joints = movable_joints[:3]
-
-# Get current joint positions and limits for arm joints
-current_positions = []
-joint_limits = []
-for joint_id in right_arm_joints[:3]:
-    joint_state = p.getJointState(robot_id, joint_id)
+def get_joint_info(robot_id: int, joint_id: int) -> JointInfo:
+    """Extract joint information from robot."""
     joint_info = p.getJointInfo(robot_id, joint_id)
-    current_positions.append(joint_state[0])
-    joint_limits.append((joint_info[8], joint_info[9]))
-    print(f"Arm joint {joint_id}: current={joint_state[0]:.3f}, limits={joint_info[8]:.3f} to {joint_info[9]:.3f}")
+    joint_state = p.getJointState(robot_id, joint_id)
+    
+    return JointInfo(
+        id=joint_id,
+        name=joint_info[1].decode('utf-8'),
+        type=joint_info[2],
+        limits=(joint_info[8], joint_info[9]),
+        current_position=joint_state[0]
+    )
 
-# Set conservative target positions for arm movement
-target_positions = []
-for i, (current, (lower, upper)) in enumerate(zip(current_positions, joint_limits)):
+def get_movable_joints(robot_id: int) -> List[JointInfo]:
+    """Get all movable joints from robot."""
+    num_joints = p.getNumJoints(robot_id)
+    movable_types = [p.JOINT_REVOLUTE, p.JOINT_PRISMATIC]
+    
+    return [
+        get_joint_info(robot_id, i) 
+        for i in range(num_joints)
+        if get_joint_info(robot_id, i).type in movable_types
+    ]
+
+def filter_joints_by_keywords(joints: List[JointInfo], keywords: List[str]) -> List[JointInfo]:
+    """Filter joints by name keywords."""
+    return [
+        joint for joint in joints
+        if any(keyword in joint.name.lower() for keyword in keywords)
+    ]
+
+def find_joint_groups(joints: List[JointInfo]) -> Tuple[List[JointInfo], List[JointInfo]]:
+    """Find arm and balance joint groups."""
+    arm_keywords = ['rightarm', 'right_arm', 'rightshoulder', 'rightelbow', 'rightwrist', 'r_arm', 'r_shoulder', 'r_elbow']
+    balance_keywords = ['leg', 'ankle', 'hip', 'knee', 'foot']
+    
+    arm_joints = filter_joints_by_keywords(joints, arm_keywords)
+    if not arm_joints:
+        arm_joints = filter_joints_by_keywords(joints, ['arm', 'shoulder'])
+    
+    balance_joints = filter_joints_by_keywords(joints, balance_keywords)
+    
+    return arm_joints, balance_joints
+
+def calculate_safe_target_position(joint: JointInfo, offset: float = 0.1) -> float:
+    """Calculate safe target position within joint limits."""
+    current, (lower, upper) = joint.current_position, joint.limits
+    
     if lower < upper:
         safe_range = (upper - lower) * 0.2
         target = current + safe_range * 0.5
-        target = max(lower, min(upper, target))
+        return max(lower, min(upper, target))
     else:
-        target = current + 0.1
-    target_positions.append(target)
+        return current + offset
 
-# Find leg/ankle joints for balance compensation
-balance_joints = []
-leg_keywords = ['leg', 'ankle', 'hip', 'knee', 'foot']
-for i in movable_joints:
-    joint_info = p.getJointInfo(robot_id, i)
-    joint_name = joint_info[1].decode('utf-8').lower()
-    if any(keyword in joint_name for keyword in leg_keywords):
-        balance_joints.append(i)
+def set_joint_position_control(robot_id: int, joint_id: int, target_position: float, force: float = 1000, 
+                             position_gain: float = 0.5, velocity_gain: float = 0.1) -> None:
+    """Set position control for a single joint."""
+    p.setJointMotorControl2(
+        robot_id, joint_id, p.POSITION_CONTROL,
+        targetPosition=target_position,
+        force=force,
+        positionGain=position_gain,
+        velocityGain=velocity_gain
+    )
 
-print(f"Found {len(balance_joints)} balance joints")
+def initialize_joint_positions(robot_id: int, joints: List[JointInfo]) -> None:
+    """Initialize all joints to position control."""
+    for joint in joints:
+        set_joint_position_control(robot_id, joint.id, joint.current_position)
 
-# Store initial joint positions for balance reference
-initial_positions = {}
-for joint_id in movable_joints:
-    joint_state = p.getJointState(robot_id, joint_id)
-    initial_positions[joint_id] = joint_state[0]
+def stabilize_robot(steps: int, robot_id: int, rate: float = 240.0) -> None:
+    """Stabilize robot for specified number of steps."""
+    print("Stabilizing robot...")
+    for i in range(steps):
+        p.stepSimulation()
+        if i % 200 == 0:
+            pos, _ = p.getBasePositionAndOrientation(robot_id)
+            print(f"Stabilization step {i}: Robot position = {pos[2]:.3f}")
+        time.sleep(1.0 / rate)
 
-# Wave animation parameters
-wave_frequency = 0.5  # Slower for better balance
-wave_amplitude = 0.1  # Smaller amplitude
-step_count = 0
+def calculate_wave_motion(step: int, frequency: float, amplitude: float) -> float:
+    """Calculate wave motion offset."""
+    t = step * 0.01
+    return math.sin(t * frequency * 2 * math.pi) * amplitude
 
-print("Starting wave animation with balance compensation...")
+def apply_balance_control(robot_id: int, balance_joints: List[JointInfo], initial_positions: Dict[int, float]) -> None:
+    """Apply strong position control to balance joints."""
+    for joint in balance_joints:
+        set_joint_position_control(
+            robot_id, joint.id, initial_positions[joint.id], 
+            force=2000, position_gain=0.8, velocity_gain=0.1
+        )
 
-while True:
-    # Calculate wave motion
-    t = step_count * 0.01
-    wave_offset = math.sin(t * wave_frequency * 2 * math.pi) * wave_amplitude
+def apply_stabilization_control(robot_id: int, joints: List[JointInfo], arm_joints: List[JointInfo], 
+                              balance_joints: List[JointInfo], initial_positions: Dict[int, float]) -> None:
+    """Apply stabilization control to non-arm, non-balance joints."""
+    arm_ids = {j.id for j in arm_joints}
+    balance_ids = {j.id for j in balance_joints}
     
-    # Get current center of mass position
-    com_pos, com_vel = p.getBasePositionAndOrientation(robot_id)[:2]
+    for joint in joints:
+        if joint.id not in arm_ids and joint.id not in balance_ids:
+            set_joint_position_control(robot_id, joint.id, initial_positions[joint.id], force=1500)
+
+def apply_wave_motion(robot_id: int, arm_joints: List[JointInfo], target_positions: List[float], 
+                     wave_offset: float, joint_limits: List[Tuple[float, float]]) -> None:
+    """Apply wave motion to arm joints."""
+    wave_multipliers = [1.0, -0.3, 0.1]
     
-    # Apply stronger position control to leg joints for balance
-    for joint_id in balance_joints:
-        p.setJointMotorControl2(robot_id, joint_id, p.POSITION_CONTROL, 
-                              targetPosition=initial_positions[joint_id], 
-                              force=2000,  # Higher force for balance
-                              positionGain=0.8,  # Higher gain for stability
-                              velocityGain=0.1)
-    
-    # Keep other non-arm joints in position with high force
-    for joint_id in movable_joints:
-        if joint_id not in right_arm_joints and joint_id not in balance_joints:
-            p.setJointMotorControl2(robot_id, joint_id, p.POSITION_CONTROL, 
-                                  targetPosition=initial_positions[joint_id], 
-                                  force=1500)
-    
-    # Apply wave motion to arm joints with reduced force
-    for i, joint_id in enumerate(right_arm_joints[:3]):
+    for i, joint in enumerate(arm_joints[:3]):
         if i < len(target_positions):
-            if i == 0:
-                target_pos = target_positions[i] + wave_offset
-            elif i == 1:
-                target_pos = target_positions[i] - wave_offset * 0.3
-            else:
-                target_pos = target_positions[i] + wave_offset * 0.1
+            multiplier = wave_multipliers[i] if i < len(wave_multipliers) else 0.05
+            target_pos = target_positions[i] + wave_offset * multiplier
             
-            # Clamp to joint limits
             if i < len(joint_limits):
                 lower, upper = joint_limits[i]
                 if lower < upper:
                     target_pos = max(lower, min(upper, target_pos))
             
-            p.setJointMotorControl2(robot_id, joint_id, p.POSITION_CONTROL, 
-                                  targetPosition=target_pos, 
-                                  force=300,  # Reduced force to minimize balance disruption
-                                  positionGain=0.5,
-                                  velocityGain=0.1)
+            set_joint_position_control(
+                robot_id, joint.id, target_pos, force=300, 
+                position_gain=0.5, velocity_gain=0.1
+            )
+
+def run_simulation(robot_id: int, config: SimulationConfig) -> None:
+    """Main simulation loop."""
+    # Get joint information
+    movable_joints = get_movable_joints(robot_id)
+    arm_joints, balance_joints = find_joint_groups(movable_joints)
     
-    p.stepSimulation()
-    time.sleep(1./240.)
-    step_count += 1
+    print(f"Controlling {len(movable_joints)} movable joints")
+    print(f"Found {len(arm_joints)} arm joints")
+    print(f"Found {len(balance_joints)} balance joints")
     
-    # Debug output
-    if step_count % 1000 == 0:
-        pos, orient = p.getBasePositionAndOrientation(robot_id)
-        print(f"Step {step_count}: Robot Z position = {pos[2]:.3f}")
+    # Initialize positions
+    initialize_joint_positions(robot_id, movable_joints)
+    stabilize_robot(config.stabilization_steps, robot_id, config.simulation_rate)
+    
+    # Calculate target positions for arm movement
+    target_positions = [calculate_safe_target_position(joint) for joint in arm_joints[:3]]
+    joint_limits = [joint.limits for joint in arm_joints[:3]]
+    
+    # Store initial positions for balance reference
+    initial_positions = {joint.id: joint.current_position for joint in movable_joints}
+    
+    print("Starting wave animation with balance compensation...")
+    
+    step_count = 0
+    while True:
+        # Calculate wave motion
+        wave_offset = calculate_wave_motion(step_count, config.wave_frequency, config.wave_amplitude)
+        
+        # Apply controls
+        apply_balance_control(robot_id, balance_joints, initial_positions)
+        apply_stabilization_control(robot_id, movable_joints, arm_joints, balance_joints, initial_positions)
+        apply_wave_motion(robot_id, arm_joints, target_positions, wave_offset, joint_limits)
+        
+        # Step simulation
+        p.stepSimulation()
+        time.sleep(1.0 / config.simulation_rate)
+        step_count += 1
+        
+        # Debug output
+        if step_count % 1000 == 0:
+            pos, _ = p.getBasePositionAndOrientation(robot_id)
+            print(f"Step {step_count}: Robot Z position = {pos[2]:.3f}")
+
+def main():
+    """Main entry point."""
+    config = SimulationConfig()
+    
+    # Initialize simulation
+    initialize_physics_engine()
+    robot_id = load_robot("valkyrie_description", [0, 0, config.robot_height])
+    
+    print(f"Robot loaded with ID: {robot_id}")
+    
+    # Run simulation
+    run_simulation(robot_id, config)
+
+if __name__ == "__main__":
+    main()
