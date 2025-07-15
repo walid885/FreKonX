@@ -1,0 +1,2 @@
+this was based on the NASA URDF for robotics. for now ,it is working allright. future planing includes developing a unique URDF for FreKonX. further work to be done. but for now it is 
+FINE 
