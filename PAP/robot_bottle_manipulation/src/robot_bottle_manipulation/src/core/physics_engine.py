@@ -11,7 +11,7 @@ class PhysicsEngine:
         
     def initialize(self) -> None:
         """Initialize PyBullet physics engine with GUI."""
-        self.physics_client = p.connect(p.GUI)
+        self.physics_client = p.connect(p.DIRECT) 
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, self.config.gravity)
         
