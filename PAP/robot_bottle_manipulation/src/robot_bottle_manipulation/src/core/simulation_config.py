@@ -24,10 +24,10 @@ class SimulationConfig:
     bottle_mass: float = 0.5
     bottle_lateral_friction: float = 0.5
     
-    # Joint control parameters
-    joint_force: float = 500
-    position_gain: float = 0.3
-    velocity_gain: float = 0.1
+    # Joint control parameters - UPDATED FOR BETTER STABILITY
+    joint_force: float = 2000  # Increased from 500
+    position_gain: float = 0.8  # Increased from 0.3
+    velocity_gain: float = 0.3  # Increased from 0.1
     max_joint_velocity: float = 1.0
     
     # Damping parameters

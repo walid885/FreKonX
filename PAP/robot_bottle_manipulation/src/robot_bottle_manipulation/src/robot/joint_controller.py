@@ -91,4 +91,44 @@ class JointController:
     def initialize_joint_positions(self, robot_id: int, joints: List[JointInfo]) -> None:
         """Initialize joint positions with current values."""
         for joint in joints:
-            self.set_joint_position_control(robot_id, joint.id, joint.current_position, force=200)
+            # Use higher force for balance-critical joints
+            force = 1000 if any(kw in joint.name.lower() for kw in ['leg', 'ankle', 'hip']) else 500
+            self.set_joint_position_control(robot_id, joint.id, joint.current_position, force=force)
+    
+    def maintain_balance(self, robot_id: int, balance_joints: List[JointInfo]) -> None:
+        """Actively maintain robot balance."""
+        base_pos, base_orn = p.getBasePositionAndOrientation(robot_id)
+        base_euler = p.getEulerFromQuaternion(base_orn)
+        
+        # Simple balance controller - keep robot upright
+        for joint in balance_joints:
+            current_joint_info = self.get_joint_info(robot_id, joint.id)
+            joint_name = joint.name.lower()
+            
+            if 'ankle' in joint_name or 'foot' in joint_name:
+                # Ankle control for pitch/roll balance
+                pitch_correction = -base_euler[0] * 0.3  # Pitch (forward/backward)
+                roll_correction = -base_euler[1] * 0.3   # Roll (left/right)
+                
+                if 'pitch' in joint_name or 'y' in joint_name:
+                    target = current_joint_info.current_position + pitch_correction
+                elif 'roll' in joint_name or 'x' in joint_name:
+                    target = current_joint_info.current_position + roll_correction
+                else:
+                    target = current_joint_info.current_position
+                    
+                self.set_joint_position_control(robot_id, joint.id, target, force=1500)
+            
+            elif 'hip' in joint_name or 'leg' in joint_name:
+                # Hip stabilization
+                target = current_joint_info.current_position
+                self.set_joint_position_control(robot_id, joint.id, target, force=1200)
+            
+            elif 'knee' in joint_name:
+                # Knee stabilization - slight bend for stability
+                target = current_joint_info.current_position + 0.1
+                self.set_joint_position_control(robot_id, joint.id, target, force=1000)
+            
+            else:
+                # Default stabilization
+                self.set_joint_position_control(robot_id, joint.id, current_joint_info.current_position, force=800)

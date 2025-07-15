@@ -94,6 +94,7 @@ class RobotBottleSimulation:
                 print(f"Stabilization step {i}: Robot Z position = {robot_pos[2]:.3f}")
                 
             time.sleep(1.0 / self.config.simulation_rate)
+
         
         print("Robot stabilized.")
         
@@ -128,16 +129,10 @@ class RobotBottleSimulation:
                             self.state.robot_id, joint.id, target
                         )
                 
-                # Maintain balance
+                # Maintain balance using active controller
                 if len(balance_joints) > 0:
-                    balance_angles = self.motion_planner.plan_stabilization_motion(balance_joints)
-                    
-                    # Apply balance motion
-                    for joint, target in zip(balance_joints, balance_angles):
-                        self.joint_controller.set_joint_position_control(
-                            self.state.robot_id, joint.id, target, force=200
-                        )
-                
+                    self.joint_controller.maintain_balance(self.state.robot_id, balance_joints)
+                                
                 # Step physics
                 self.physics_engine.step()
                 time.sleep(1.0 / self.config.simulation_rate)
